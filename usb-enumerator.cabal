@@ -9,8 +9,8 @@ author:        Bas van Dijk <v.dijk.bas@gmail.com>
 maintainer:    Bas van Dijk <v.dijk.bas@gmail.com>
 stability:     experimental
 category:      System
-synopsis:      Provides iteratee enumerators for the usb package
-description:   Provides iteratee enumerators for the @usb@ package
+synopsis:      Iteratee enumerators for the usb package
+description:   This packages provides iteratee enumerators for the @usb@ package.
 
 source-repository head
   Type:     darcs
