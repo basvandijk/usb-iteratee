@@ -27,7 +27,6 @@ import Data.Function         ( ($) )
 import Data.Word             ( Word8 )
 import Data.Maybe            ( Maybe(Nothing, Just) )
 import Control.Monad         ( return, (>>=), fail )
-import Text.Show             ( show )
 import Foreign.Storable      ( peek )
 import Foreign.Ptr           ( castPtr )
 
@@ -49,16 +48,6 @@ import Control.Monad.CatchIO ( MonadCatchIO )
 -- from MonadCatchIO-transformers-foreign:
 import Control.Monad.CatchIO.Foreign ( alloca, allocaBytes )
 
--- from iteratee:
-import Data.Iteratee.Base ( EnumeratorGM
-                          , StreamG(Chunk)
-                          , IterGV(Done, Cont)
-                          , runIter
-                          , enumErr
-                          , throwErr
-                          )
-import Data.Iteratee.Base.StreamChunk ( ReadableChunk(readFromPtr) )
-
 -- from usb:
 import System.USB.DeviceHandling ( DeviceHandle )
 import System.USB.Descriptors    ( EndpointAddress )
@@ -74,11 +63,113 @@ import System.USB.Unsafe ( C'TransferFunc
 import System.USB.Descriptors    ( maxPacketSize, endpointMaxPacketSize )
 #endif
 
+#if MIN_VERSION_iteratee(0,4,0)
+-- from iteratee:
+import Data.Iteratee.Base               ( Stream(EOF, Chunk), runIter, idoneM )
+import Data.Iteratee.Iteratee           ( Enumerator, throwErr )
+import Data.Iteratee.Base.ReadableChunk ( ReadableChunk(readFromPtr) )
+import Data.NullPoint                   ( NullPoint(empty) )
+
+-- from base:
+import Control.Exception ( toException )
+
+-- from base-unicode-symbols:
+import Data.Function.Unicode ( (∘) )
+#else
+-- from iteratee:
+import Data.Iteratee.Base ( EnumeratorGM
+                          , StreamG(Chunk)
+                          , IterGV(Done, Cont)
+                          , runIter
+                          , enumErr
+                          , throwErr
+                          )
+import Data.Iteratee.Base.StreamChunk ( ReadableChunk(readFromPtr) )
+
+-- from base:
+import Text.Show ( show )
+#endif
+
 
 --------------------------------------------------------------------------------
 -- Enumerators
 --------------------------------------------------------------------------------
+#if MIN_VERSION_iteratee(0,4,0)
+enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadCatchIO m)
+             ⇒ DeviceHandle    -- ^ A handle for the device to communicate with.
+             → EndpointAddress -- ^ The address of a valid 'In' and 'Bulk'
+                               --   endpoint to communicate with. Make sure the
+                               --   endpoint belongs to the current alternate
+                               --   setting of a claimed interface which belongs
+                               --   to the device.
+             → Size            -- ^ Chunk size. A good value for this would be
+                               --   the @'maxPacketSize' . 'endpointMaxPacketSize'@.
+             → Timeout         -- ^ Timeout (in milliseconds) that this function
+                               --   should wait for each chunk before giving up
+                               --   due to no response being received.  For no
+                               --   timeout, use value 0.
+             → Enumerator s m α
+enumReadBulk = enumRead c'libusb_bulk_transfer
 
+enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadCatchIO m)
+                  ⇒ DeviceHandle    -- ^ A handle for the device to communicate
+                                    --   with.
+                  → EndpointAddress -- ^ The address of a valid 'In' and
+                                    --   'Interrupt' endpoint to communicate
+                                    --   with. Make sure the endpoint belongs to
+                                    --   the current alternate setting of a
+                                    --   claimed interface which belongs to the
+                                    --   device.
+                  → Size            -- ^ Chunk size. A good value for this would
+                                    --   be the @'maxPacketSize' . 'endpointMaxPacketSize'@.
+                  → Timeout         -- ^ Timeout (in milliseconds) that this
+                                    --   function should wait for each chunk
+                                    --   before giving up due to no response
+                                    --   being received.  For no timeout, use
+                                    --   value 0.
+                  → Enumerator s m α
+enumReadInterrupt = enumRead c'libusb_interrupt_transfer
+
+
+--------------------------------------------------------------------------------
+
+enumRead ∷ (ReadableChunk s Word8, NullPoint s, MonadCatchIO m)
+         ⇒ C'TransferFunc → ( DeviceHandle
+                            → EndpointAddress
+                            → Size
+                            → Timeout
+                            → Enumerator s m α
+                            )
+enumRead c'transfer = \devHndl
+                       endpoint
+                       chunkSize
+                       timeout → \iter →
+    alloca $ \transferredPtr →
+      allocaBytes chunkSize $ \dataPtr →
+        let loop i = runIter i idoneM on_cont
+            on_cont _ (Just e) = return $ throwErr e
+            on_cont k Nothing  = do
+              err ← liftIO $ c'transfer (getDevHndlPtr devHndl)
+                                        (marshalEndpointAddress endpoint)
+                                        (castPtr dataPtr)
+                                        (fromIntegral chunkSize)
+                                        transferredPtr
+                                        (fromIntegral timeout)
+              if err ≢ c'LIBUSB_SUCCESS ∧
+                 err ≢ c'LIBUSB_ERROR_TIMEOUT
+                then return ∘ k $ EOF $ Just $ toException $ convertUSBException err
+                else do
+                  t ← liftIO $ peek transferredPtr
+                  if t ≡ 0
+                    then return ∘ k $ Chunk empty
+                    else do
+                      s ← liftIO ∘ readFromPtr dataPtr $ fromIntegral t
+                      loop ∘ k $ Chunk s
+        in loop iter
+
+
+--------------------------------------------------------------------------------
+#else
 enumReadBulk ∷ (ReadableChunk s Word8, MonadCatchIO m)
              ⇒ DeviceHandle    -- ^ A handle for the device to communicate with.
              → EndpointAddress -- ^ The address of a valid 'In' and 'Bulk'
@@ -152,6 +243,7 @@ enumRead c'transfer = \devHndl
                         Cont i2 Nothing → loop i2
                         Cont _ (Just e) → return $ throwErr e
         in loop iter
+#endif
 
 
 -- The End ---------------------------------------------------------------------
