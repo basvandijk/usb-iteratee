@@ -1,5 +1,5 @@
 name:          usb-enumerator
-version:       0.1.0.1
+version:       0.1.0.2
 cabal-version: >=1.6
 build-type:    Custom
 license:       BSD3
@@ -25,5 +25,5 @@ Library
                , transformers                      >= 0.2   && < 0.3
                , MonadCatchIO-transformers         >= 0.2   && < 0.3
                , MonadCatchIO-transformers-foreign >= 0.1   && < 0.2
-               , usb                               >= 0.5   && < 0.6
+               , usb                               >= 0.5   && < 0.7
   exposed-modules: System.USB.IO.Synchronous.Enumerator
