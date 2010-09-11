@@ -1,9 +1,17 @@
+0.1.0.2
+
+(Released on: Sat Sep 11 14:19:49 UTC 2010)
+
+* Support usb-0.6
+
+
 0.1.0.1
 
 (Released on: Wed Sep 1 20:12:06 UTC 2010)
 
 * Support iteratee-0.4.*
   (Both the 0.3.* and 0.4.* versions are supported)
+
 
 0.1
 
