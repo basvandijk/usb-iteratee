@@ -22,13 +22,18 @@ module System.USB.IO.Synchronous.Enumerator
 --------------------------------------------------------------------------------
 
 -- from base:
-import Prelude               ( fromInteger, fromIntegral )
+import Prelude               ( fromIntegral )
 import Data.Function         ( ($) )
 import Data.Word             ( Word8 )
 import Data.Maybe            ( Maybe(Nothing, Just) )
-import Control.Monad         ( return, (>>=), fail )
+import Control.Monad         ( return )
 import Foreign.Storable      ( peek )
 import Foreign.Ptr           ( castPtr )
+
+#ifdef GHC_LT_7
+import Prelude               ( fromInteger )
+import Control.Monad         ( (>>=), fail )
+#endif
 
 -- from base-unicode-symbols:
 import Data.Eq.Unicode       ( (≡), (≢) )
