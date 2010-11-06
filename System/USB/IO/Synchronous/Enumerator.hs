@@ -29,6 +29,7 @@ import Data.Maybe            ( Maybe(Nothing, Just) )
 import Control.Monad         ( return )
 import Foreign.Storable      ( peek )
 import Foreign.Ptr           ( castPtr )
+import Foreign.Marshal.Alloc ( alloca, allocaBytes )
 
 #if __GLASGOW_HASKELL__ < 701
 import Prelude               ( fromInteger )
@@ -47,11 +48,8 @@ import Bindings.Libusb ( c'libusb_bulk_transfer, c'libusb_interrupt_transfer
 -- from transformers:
 import Control.Monad.IO.Class ( liftIO )
 
--- from MonadCatchIO-transformers:
-import Control.Monad.CatchIO ( MonadCatchIO )
-
--- from MonadCatchIO-transformers-foreign:
-import Control.Monad.CatchIO.Foreign ( alloca, allocaBytes )
+-- from monad-peel:
+import Control.Monad.IO.Peel ( MonadPeelIO, liftIOOp )
 
 -- from usb:
 import System.USB.DeviceHandling ( DeviceHandle )
@@ -100,7 +98,7 @@ import Text.Show ( show )
 -- Enumerators
 --------------------------------------------------------------------------------
 #if MIN_VERSION_iteratee(0,4,0)
-enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadCatchIO m)
+enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadPeelIO m)
              ⇒ DeviceHandle    -- ^ A handle for the device to communicate with.
              → EndpointAddress -- ^ The address of a valid 'In' and 'Bulk'
                                --   endpoint to communicate with. Make sure the
@@ -116,7 +114,7 @@ enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadCatchIO m)
              → Enumerator s m α
 enumReadBulk = enumRead c'libusb_bulk_transfer
 
-enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadCatchIO m)
+enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadPeelIO m)
                   ⇒ DeviceHandle    -- ^ A handle for the device to communicate
                                     --   with.
                   → EndpointAddress -- ^ The address of a valid 'In' and
@@ -138,7 +136,7 @@ enumReadInterrupt = enumRead c'libusb_interrupt_transfer
 
 --------------------------------------------------------------------------------
 
-enumRead ∷ (ReadableChunk s Word8, NullPoint s, MonadCatchIO m)
+enumRead ∷ (ReadableChunk s Word8, NullPoint s, MonadPeelIO m)
          ⇒ C'TransferFunc → ( DeviceHandle
                             → EndpointAddress
                             → Size
@@ -149,8 +147,8 @@ enumRead c'transfer = \devHndl
                        endpoint
                        chunkSize
                        timeout → \iter →
-    alloca $ \transferredPtr →
-      allocaBytes chunkSize $ \dataPtr →
+    liftIOOp alloca $ \transferredPtr →
+     liftIOOp  (allocaBytes chunkSize) $ \dataPtr →
         let loop i = runIter i idoneM on_cont
             on_cont _ (Just e) = return $ throwErr e
             on_cont k Nothing  = do
@@ -175,7 +173,7 @@ enumRead c'transfer = \devHndl
 
 --------------------------------------------------------------------------------
 #else
-enumReadBulk ∷ (ReadableChunk s Word8, MonadCatchIO m)
+enumReadBulk ∷ (ReadableChunk s Word8, MonadPeelIO m)
              ⇒ DeviceHandle    -- ^ A handle for the device to communicate with.
              → EndpointAddress -- ^ The address of a valid 'In' and 'Bulk'
                                --   endpoint to communicate with. Make sure the
@@ -191,7 +189,7 @@ enumReadBulk ∷ (ReadableChunk s Word8, MonadCatchIO m)
              → EnumeratorGM s Word8 m α
 enumReadBulk = enumRead c'libusb_bulk_transfer
 
-enumReadInterrupt ∷ (ReadableChunk s Word8, MonadCatchIO m)
+enumReadInterrupt ∷ (ReadableChunk s Word8, MonadPeelIO m)
                   ⇒ DeviceHandle    -- ^ A handle for the device to communicate
                                     --   with.
                   → EndpointAddress -- ^ The address of a valid 'In' and
@@ -213,7 +211,7 @@ enumReadInterrupt = enumRead c'libusb_interrupt_transfer
 
 --------------------------------------------------------------------------------
 
-enumRead ∷ (ReadableChunk s Word8, MonadCatchIO m)
+enumRead ∷ (ReadableChunk s Word8, MonadPeelIO m)
          ⇒ C'TransferFunc → ( DeviceHandle
                             → EndpointAddress
                             → Size
@@ -224,8 +222,8 @@ enumRead c'transfer = \devHndl
                        endpoint
                        chunkSize
                        timeout → \iter →
-    alloca $ \transferredPtr →
-      allocaBytes chunkSize $ \dataPtr →
+    liftIOOp alloca $ \transferredPtr →
+      liftIOOp (allocaBytes chunkSize) $ \dataPtr →
         let loop i1 = do
               err ← liftIO $ c'transfer (getDevHndlPtr devHndl)
                                         (marshalEndpointAddress endpoint)
