@@ -22,48 +22,50 @@ module System.USB.IO.Synchronous.Enumerator
 --------------------------------------------------------------------------------
 
 -- from base:
-import Prelude               ( fromIntegral )
-import Data.Function         ( ($) )
-import Data.Word             ( Word8 )
-import Data.Maybe            ( Maybe(Nothing, Just) )
-import Control.Monad         ( return )
-import Foreign.Storable      ( peek )
-import Foreign.Ptr           ( castPtr )
-import Foreign.Marshal.Alloc ( alloca, allocaBytes )
+import Prelude                          ( fromIntegral )
+import Data.Function                    ( ($) )
+import Data.Word                        ( Word8 )
+import Data.Maybe                       ( Maybe(Nothing, Just) )
+import Control.Monad                    ( return )
+import Foreign.Storable                 ( peek )
+import Foreign.Ptr                      ( castPtr )
+import Foreign.Marshal.Alloc            ( alloca, allocaBytes )
 
 #if __GLASGOW_HASKELL__ < 701
-import Prelude               ( fromInteger )
-import Control.Monad         ( (>>=), fail )
+import Prelude                          ( fromInteger )
+import Control.Monad                    ( (>>=), fail )
 #endif
 
 -- from base-unicode-symbols:
-import Data.Eq.Unicode       ( (≡), (≢) )
-import Data.Bool.Unicode     ( (∧) )
+import Data.Eq.Unicode                  ( (≡), (≢) )
+import Data.Bool.Unicode                ( (∧) )
 
 -- from bindings-libusb:
-import Bindings.Libusb ( c'libusb_bulk_transfer, c'libusb_interrupt_transfer
-                       , c'LIBUSB_SUCCESS, c'LIBUSB_ERROR_TIMEOUT
-                       )
+import Bindings.Libusb                  ( c'libusb_bulk_transfer
+                                        , c'libusb_interrupt_transfer
+                                        , c'LIBUSB_SUCCESS
+                                        , c'LIBUSB_ERROR_TIMEOUT
+                                        )
 
 -- from transformers:
-import Control.Monad.IO.Class ( liftIO )
+import Control.Monad.IO.Class           ( liftIO )
 
 -- from monad-peel:
-import Control.Monad.IO.Peel ( MonadPeelIO, liftIOOp )
+import Control.Monad.IO.Peel            ( MonadPeelIO, liftIOOp )
 
 -- from usb:
-import System.USB.DeviceHandling ( DeviceHandle )
-import System.USB.Descriptors    ( EndpointAddress )
-import System.USB.IO.Synchronous ( Timeout, Size )
+import System.USB.DeviceHandling        ( DeviceHandle )
+import System.USB.Descriptors           ( EndpointAddress )
+import System.USB.IO.Synchronous        ( Timeout, Size )
 
-import System.USB.Unsafe ( C'TransferFunc
-                         , getDevHndlPtr
-                         , marshalEndpointAddress
-                         , convertUSBException
-                         )
+import System.USB.Unsafe                ( C'TransferFunc
+                                        , getDevHndlPtr
+                                        , marshalEndpointAddress
+                                        , convertUSBException
+                                        )
 
 #ifdef __HADDOCK__
-import System.USB.Descriptors    ( maxPacketSize, endpointMaxPacketSize )
+import System.USB.Descriptors           ( maxPacketSize, endpointMaxPacketSize )
 #endif
 
 #if MIN_VERSION_iteratee(0,4,0)
@@ -74,23 +76,23 @@ import Data.Iteratee.Base.ReadableChunk ( ReadableChunk(readFromPtr) )
 import Data.NullPoint                   ( NullPoint(empty) )
 
 -- from base:
-import Control.Exception ( toException )
+import Control.Exception                ( toException )
 
 -- from base-unicode-symbols:
-import Data.Function.Unicode ( (∘) )
+import Data.Function.Unicode            ( (∘) )
 #else
 -- from iteratee:
-import Data.Iteratee.Base ( EnumeratorGM
-                          , StreamG(Chunk)
-                          , IterGV(Done, Cont)
-                          , runIter
-                          , enumErr
-                          , throwErr
-                          )
-import Data.Iteratee.Base.StreamChunk ( ReadableChunk(readFromPtr) )
+import Data.Iteratee.Base               ( EnumeratorGM
+                                        , StreamG(Chunk)
+                                        , IterGV(Done, Cont)
+                                        , runIter
+                                        , enumErr
+                                        , throwErr
+                                        )
+import Data.Iteratee.Base.StreamChunk   ( ReadableChunk(readFromPtr) )
 
 -- from base:
-import Text.Show ( show )
+import Text.Show                        ( show )
 #endif
 
 
