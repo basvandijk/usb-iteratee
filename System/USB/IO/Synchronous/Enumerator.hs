@@ -30,7 +30,7 @@ import Control.Monad         ( return )
 import Foreign.Storable      ( peek )
 import Foreign.Ptr           ( castPtr )
 
-#ifdef GHC_LT_7
+#if __GLASGOW_HASKELL__ < 701
 import Prelude               ( fromInteger )
 import Control.Monad         ( (>>=), fail )
 #endif
