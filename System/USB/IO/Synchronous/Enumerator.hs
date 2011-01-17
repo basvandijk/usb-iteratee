@@ -31,7 +31,7 @@ import Foreign.Storable                 ( peek )
 import Foreign.Ptr                      ( castPtr )
 import Foreign.Marshal.Alloc            ( alloca, allocaBytes )
 
-#if __GLASGOW_HASKELL__ < 701
+#if __GLASGOW_HASKELL__ < 700
 import Prelude                          ( fromInteger )
 import Control.Monad                    ( (>>=), fail )
 #endif
