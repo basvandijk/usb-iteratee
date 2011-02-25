@@ -50,8 +50,8 @@ import Bindings.Libusb                  ( c'libusb_bulk_transfer
 -- from transformers:
 import Control.Monad.IO.Class           ( liftIO )
 
--- from monad-peel:
-import Control.Monad.IO.Peel            ( MonadPeelIO, liftIOOp )
+-- from monad-control:
+import Control.Monad.IO.Control         ( MonadControlIO, liftIOOp )
 
 -- from usb:
 import System.USB.DeviceHandling        ( DeviceHandle )
@@ -100,7 +100,7 @@ import Text.Show                        ( show )
 -- Enumerators
 --------------------------------------------------------------------------------
 #if MIN_VERSION_iteratee(0,4,0)
-enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadPeelIO m)
+enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
              ⇒ DeviceHandle    -- ^ A handle for the device to communicate with.
              → EndpointAddress -- ^ The address of a valid 'In' and 'Bulk'
                                --   endpoint to communicate with. Make sure the
@@ -116,7 +116,7 @@ enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadPeelIO m)
              → Enumerator s m α
 enumReadBulk = enumRead c'libusb_bulk_transfer
 
-enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadPeelIO m)
+enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
                   ⇒ DeviceHandle    -- ^ A handle for the device to communicate
                                     --   with.
                   → EndpointAddress -- ^ The address of a valid 'In' and
@@ -138,7 +138,7 @@ enumReadInterrupt = enumRead c'libusb_interrupt_transfer
 
 --------------------------------------------------------------------------------
 
-enumRead ∷ (ReadableChunk s Word8, NullPoint s, MonadPeelIO m)
+enumRead ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
          ⇒ C'TransferFunc → ( DeviceHandle
                             → EndpointAddress
                             → Size
@@ -175,7 +175,7 @@ enumRead c'transfer = \devHndl
 
 --------------------------------------------------------------------------------
 #else
-enumReadBulk ∷ (ReadableChunk s Word8, MonadPeelIO m)
+enumReadBulk ∷ (ReadableChunk s Word8, MonadControlIO m)
              ⇒ DeviceHandle    -- ^ A handle for the device to communicate with.
              → EndpointAddress -- ^ The address of a valid 'In' and 'Bulk'
                                --   endpoint to communicate with. Make sure the
@@ -191,7 +191,7 @@ enumReadBulk ∷ (ReadableChunk s Word8, MonadPeelIO m)
              → EnumeratorGM s Word8 m α
 enumReadBulk = enumRead c'libusb_bulk_transfer
 
-enumReadInterrupt ∷ (ReadableChunk s Word8, MonadPeelIO m)
+enumReadInterrupt ∷ (ReadableChunk s Word8, MonadControlIO m)
                   ⇒ DeviceHandle    -- ^ A handle for the device to communicate
                                     --   with.
                   → EndpointAddress -- ^ The address of a valid 'In' and
@@ -213,7 +213,7 @@ enumReadInterrupt = enumRead c'libusb_interrupt_transfer
 
 --------------------------------------------------------------------------------
 
-enumRead ∷ (ReadableChunk s Word8, MonadPeelIO m)
+enumRead ∷ (ReadableChunk s Word8, MonadControlIO m)
          ⇒ C'TransferFunc → ( DeviceHandle
                             → EndpointAddress
                             → Size
