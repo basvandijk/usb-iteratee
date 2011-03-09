@@ -3,7 +3,9 @@
 (Released on: Wed Mar 9 12:22:02 UTC 2011)
 
 * Replaced monad-peel with monad-control
+
 * Support iteratee-0.8.*
+
 * Support usb-0.9
 
 
