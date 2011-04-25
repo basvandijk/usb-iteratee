@@ -13,6 +13,8 @@ category:      System
 synopsis:      Iteratee enumerators for the usb package
 description:   This packages provides iteratee enumerators for the @usb@ package.
 
+extra-source-files: README.markdown, NEWS
+
 source-repository head
   Type:     git
   Location: git://github.com/basvandijk/usb-enumerator.git
