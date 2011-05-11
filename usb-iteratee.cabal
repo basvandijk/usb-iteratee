@@ -1,5 +1,5 @@
 name:          usb-iteratee
-version:       0.3.0.1
+version:       0.4
 cabal-version: >=1.6
 build-type:    Custom
 license:       BSD3
@@ -29,4 +29,4 @@ Library
                , transformers                      >= 0.2   && < 0.3
                , monad-control                     >= 0.2   && < 0.3
                , usb                               >= 1.0   && < 1.1
-  exposed-modules: System.USB.IO.Synchronous.Enumerator
+  exposed-modules: System.USB.IO.Iteratee

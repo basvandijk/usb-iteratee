@@ -2,7 +2,7 @@
 
 --------------------------------------------------------------------------------
 -- |
--- Module      :  System.USB.IO.Synchronous.Enumerator
+-- Module      :  System.USB.IO.Iteratee
 -- Copyright   :  (c) 2009–2010 Bas van Dijk
 -- License     :  BSD3 (see the file LICENSE)
 -- Maintainer  :  Bas van Dijk <v.dijk.bas@gmail.com>
@@ -11,7 +11,7 @@
 --
 --------------------------------------------------------------------------------
 
-module System.USB.IO.Synchronous.Enumerator
+module System.USB.IO.Iteratee
     ( enumReadBulk
     , enumReadInterrupt
     ) where
