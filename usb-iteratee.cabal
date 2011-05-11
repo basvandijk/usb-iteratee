@@ -1,4 +1,4 @@
-name:          usb-enumerator
+name:          usb-iteratee
 version:       0.3.0.1
 cabal-version: >=1.6
 build-type:    Custom
@@ -7,7 +7,7 @@ license-file:  LICENSE
 copyright:     2010 Bas van Dijk <v.dijk.bas@gmail.com>
 author:        Bas van Dijk <v.dijk.bas@gmail.com>
 maintainer:    Bas van Dijk <v.dijk.bas@gmail.com>
-bug-reports:   https://github.com/basvandijk/usb-enumerator/issues
+bug-reports:   https://github.com/basvandijk/usb-iteratee/issues
 stability:     experimental
 category:      System
 synopsis:      Iteratee enumerators for the usb package
@@ -17,7 +17,7 @@ extra-source-files: README.markdown, NEWS
 
 source-repository head
   Type:     git
-  Location: git://github.com/basvandijk/usb-enumerator.git
+  Location: git://github.com/basvandijk/usb-iteratee.git
 
 Library
   GHC-Options: -Wall
