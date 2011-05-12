@@ -86,8 +86,8 @@ import Control.Exception                ( toException )
 -- from base-unicode-symbols:
 import Data.Function.Unicode            ( (∘) )
 
---------------------------------------------------------------------------------
 #ifdef HAS_EVENT_MANAGER
+--------------------------------------------------------------------------------
 -- from base:
 import Data.Bool         ( otherwise, not )
 import Data.Int          ( Int )
@@ -194,11 +194,11 @@ enumReadInterrupt
     = enumReadInterruptSync
 #endif
 
+#ifdef HAS_EVENT_MANAGER
 --------------------------------------------------------------------------------
 -- Asynchronous
 --------------------------------------------------------------------------------
 
-#ifdef HAS_EVENT_MANAGER
 enumReadBulkAsync, enumReadInterruptAsync ∷
     (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
   ⇒ DeviceHandle → EndpointAddress → Size → Timeout → Enumerator s m α
