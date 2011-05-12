@@ -68,7 +68,6 @@ import System.USB.Internal              ( C'TransferFunc
 import System.USB.Descriptors           ( maxPacketSize, endpointMaxPacketSize )
 #endif
 
-#if MIN_VERSION_iteratee(0,4,0)
 -- from iteratee:
 import Data.Iteratee.Base               ( Stream(EOF, Chunk), runIter, idoneM )
 import Data.Iteratee.Iteratee           ( Enumerator, throwErr )
@@ -80,26 +79,12 @@ import Control.Exception                ( toException )
 
 -- from base-unicode-symbols:
 import Data.Function.Unicode            ( (∘) )
-#else
--- from iteratee:
-import Data.Iteratee.Base               ( EnumeratorGM
-                                        , StreamG(Chunk)
-                                        , IterGV(Done, Cont)
-                                        , runIter
-                                        , enumErr
-                                        , throwErr
-                                        )
-import Data.Iteratee.Base.StreamChunk   ( ReadableChunk(readFromPtr) )
-
--- from base:
-import Text.Show                        ( show )
-#endif
 
 
 --------------------------------------------------------------------------------
 -- Enumerators
 --------------------------------------------------------------------------------
-#if MIN_VERSION_iteratee(0,4,0)
+
 enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
              ⇒ DeviceHandle    -- ^ A handle for the device to communicate with.
              → EndpointAddress -- ^ The address of a valid 'In' and 'Bulk'
@@ -135,7 +120,6 @@ enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
                   → Enumerator s m α
 enumReadInterrupt = enumRead c'libusb_interrupt_transfer
 
-
 --------------------------------------------------------------------------------
 
 enumRead ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
@@ -150,7 +134,7 @@ enumRead c'transfer = \devHndl
                        chunkSize
                        timeout → \iter →
     liftIOOp alloca $ \transferredPtr →
-     liftIOOp  (allocaBytes chunkSize) $ \dataPtr →
+     liftIOOp (allocaBytes chunkSize) $ \dataPtr →
         let loop i = runIter i idoneM on_cont
             on_cont _ (Just e) = return $ throwErr e
             on_cont k Nothing  = do
@@ -171,84 +155,3 @@ enumRead c'transfer = \devHndl
                       s ← liftIO ∘ readFromPtr dataPtr $ fromIntegral t
                       loop ∘ k $ Chunk s
         in loop iter
-
-
---------------------------------------------------------------------------------
-#else
-enumReadBulk ∷ (ReadableChunk s Word8, MonadControlIO m)
-             ⇒ DeviceHandle    -- ^ A handle for the device to communicate with.
-             → EndpointAddress -- ^ The address of a valid 'In' and 'Bulk'
-                               --   endpoint to communicate with. Make sure the
-                               --   endpoint belongs to the current alternate
-                               --   setting of a claimed interface which belongs
-                               --   to the device.
-             → Size            -- ^ Chunk size. A good value for this would be
-                               --   the @'maxPacketSize' . 'endpointMaxPacketSize'@.
-             → Timeout         -- ^ Timeout (in milliseconds) that this function
-                               --   should wait for each chunk before giving up
-                               --   due to no response being received.  For no
-                               --   timeout, use value 0.
-             → EnumeratorGM s Word8 m α
-enumReadBulk = enumRead c'libusb_bulk_transfer
-
-enumReadInterrupt ∷ (ReadableChunk s Word8, MonadControlIO m)
-                  ⇒ DeviceHandle    -- ^ A handle for the device to communicate
-                                    --   with.
-                  → EndpointAddress -- ^ The address of a valid 'In' and
-                                    --   'Interrupt' endpoint to communicate
-                                    --   with. Make sure the endpoint belongs to
-                                    --   the current alternate setting of a
-                                    --   claimed interface which belongs to the
-                                    --   device.
-                  → Size            -- ^ Chunk size. A good value for this would
-                                    --   be the @'maxPacketSize' . 'endpointMaxPacketSize'@.
-                  → Timeout         -- ^ Timeout (in milliseconds) that this
-                                    --   function should wait for each chunk
-                                    --   before giving up due to no response
-                                    --   being received.  For no timeout, use
-                                    --   value 0.
-                  → EnumeratorGM s Word8 m α
-enumReadInterrupt = enumRead c'libusb_interrupt_transfer
-
-
---------------------------------------------------------------------------------
-
-enumRead ∷ (ReadableChunk s Word8, MonadControlIO m)
-         ⇒ C'TransferFunc → ( DeviceHandle
-                            → EndpointAddress
-                            → Size
-                            → Timeout
-                            → EnumeratorGM s Word8 m α
-                            )
-enumRead c'transfer = \devHndl
-                       endpoint
-                       chunkSize
-                       timeout → \iter →
-    liftIOOp alloca $ \transferredPtr →
-      liftIOOp (allocaBytes chunkSize) $ \dataPtr →
-        let loop i1 = do
-              err ← liftIO $ c'transfer (getDevHndlPtr devHndl)
-                                        (marshalEndpointAddress endpoint)
-                                        (castPtr dataPtr)
-                                        (fromIntegral chunkSize)
-                                        transferredPtr
-                                        (fromIntegral timeout)
-              if err ≢ c'LIBUSB_SUCCESS ∧
-                 err ≢ c'LIBUSB_ERROR_TIMEOUT
-                then enumErr (show $ convertUSBException err) i1
-                else do
-                  t ← liftIO $ peek transferredPtr
-                  if t ≡ 0
-                    then return i1
-                    else do
-                      s ← liftIO $ readFromPtr dataPtr $ fromIntegral t
-                      r ← runIter i1 $ Chunk s
-                      case r of
-                        Done x _        → return $ return x
-                        Cont i2 Nothing → loop i2
-                        Cont _ (Just e) → return $ throwErr e
-        in loop iter
-#endif
-
-
--- The End ---------------------------------------------------------------------
