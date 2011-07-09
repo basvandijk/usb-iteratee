@@ -100,7 +100,10 @@ import System.IO         ( IO )
 import Text.Show         ( show )
 import Prelude           ( (*), error, String )
 import Control.Exception ( onException, mask_, uninterruptibleMask_ )
-import System.Event      ( registerTimeout, unregisterTimeout )
+
+import qualified System.Event as EventManager ( registerTimeout
+                                              , unregisterTimeout
+                                              )
 
 -- from iteratee:
 import Data.Iteratee.Base ( Iteratee )
@@ -244,6 +247,27 @@ enum transType
 
      liftIOOp (allocaTransfer nrOfIsoPackets) $ \transPtr → do
        lock ← liftIO newLock
+
+       let Just (evtMgr, mbHandleEvents) = getEventManager $
+                                             getCtx $
+                                               getDevice devHndl
+           wait = case mbHandleEvents of
+                    Nothing → acquire lock
+                                `onException`
+                                  (uninterruptibleMask_ $ do
+                                     _err ← c'libusb_cancel_transfer transPtr
+                                     acquire lock)
+                    Just handleEvents → do
+                      tk ← EventManager.registerTimeout evtMgr
+                                                        (timeout * 1000)
+                                                        handleEvents
+                      acquire lock
+                        `onException`
+                          (uninterruptibleMask_ $ do
+                             EventManager.unregisterTimeout evtMgr tk
+                             _err ← c'libusb_cancel_transfer transPtr
+                             acquire lock)
+
        liftIOOp (withCallback (\_ → release lock)) $ \cbPtr → do
 
          liftIO $ poke transPtr $ C'libusb_transfer
@@ -271,25 +295,7 @@ enum transType
                        err ← c'libusb_submit_transfer transPtr
                        if err ≢ c'LIBUSB_SUCCESS
                          then return $ Just $ convertUSBException err
-                         else Nothing <$ do
-                           -- Wait for the transfer to terminate:
-                           let Just (evtMgr, mbHandleEvents) = getEventManager $
-                                                                 getCtx $
-                                                                   getDevice devHndl
-                           case mbHandleEvents of
-                             Nothing → acquire lock
-                                         `onException`
-                                           (uninterruptibleMask_ $ do
-                                              _err ← c'libusb_cancel_transfer transPtr
-                                              acquire lock)
-                             Just handleEvents → do
-                               tk ← registerTimeout evtMgr (timeout * 1000) handleEvents
-                               acquire lock
-                                 `onException`
-                                   (uninterruptibleMask_ $ do
-                                      unregisterTimeout evtMgr tk
-                                      _err ← c'libusb_cancel_transfer transPtr
-                                      acquire lock)
+                         else Nothing <$ wait
 
                let ex = return ∘ k ∘ EOF ∘ Just ∘ toException
 
