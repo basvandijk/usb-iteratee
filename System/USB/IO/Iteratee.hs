@@ -166,11 +166,9 @@ enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
              → Enumerator s m α
 enumReadBulk
 #ifdef HAS_EVENT_MANAGER
-    | threaded  = enumReadBulkAsync
-    | otherwise = enumReadBulkSync
-#else
-    = enumReadBulkSync
+    | threaded  = enumReadAsync c'LIBUSB_TRANSFER_TYPE_BULK
 #endif
+    | otherwise = enumReadSync c'libusb_bulk_transfer
 
 -- | Iteratee enumerator for reading /interrupt/ endpoints.
 enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
@@ -191,23 +189,14 @@ enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
                   → Enumerator s m α
 enumReadInterrupt
 #ifdef HAS_EVENT_MANAGER
-    | threaded  = enumReadInterruptAsync
-    | otherwise = enumReadInterruptSync
-#else
-    = enumReadInterruptSync
+    | threaded  = enumReadAsync c'LIBUSB_TRANSFER_TYPE_INTERRUPT
 #endif
+    | otherwise = enumReadSync c'libusb_interrupt_transfer
 
 #ifdef HAS_EVENT_MANAGER
 --------------------------------------------------------------------------------
 -- Asynchronous
 --------------------------------------------------------------------------------
-
-enumReadBulkAsync, enumReadInterruptAsync ∷
-    (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
-  ⇒ DeviceHandle → EndpointAddress → Size → Timeout → Enumerator s m α
-
-enumReadBulkAsync      = enumReadAsync c'LIBUSB_TRANSFER_TYPE_BULK
-enumReadInterruptAsync = enumReadAsync c'LIBUSB_TRANSFER_TYPE_INTERRUPT
 
 enumReadAsync ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
               ⇒ C'TransferType
@@ -389,12 +378,6 @@ convertIsosToChunks nrOfIsoPackets transPtr bufferPtr =
 --------------------------------------------------------------------------------
 -- Synchronous
 --------------------------------------------------------------------------------
-
-enumReadBulkSync, enumReadInterruptSync ∷
-    (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
-  ⇒ DeviceHandle → EndpointAddress → Size → Timeout → Enumerator s m α
-enumReadBulkSync      = enumReadSync c'libusb_bulk_transfer
-enumReadInterruptSync = enumReadSync c'libusb_interrupt_transfer
 
 enumReadSync ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
              ⇒ C'TransferFunc → ( DeviceHandle
