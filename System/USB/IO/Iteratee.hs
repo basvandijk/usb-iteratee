@@ -1,4 +1,9 @@
-{-# LANGUAGE CPP, UnicodeSyntax, NoImplicitPrelude, FlexibleContexts #-}
+{-# LANGUAGE CPP
+           , UnicodeSyntax
+           , NoImplicitPrelude
+           , FlexibleContexts
+           , ScopedTypeVariables
+  #-}
 
 --------------------------------------------------------------------------------
 -- |
@@ -50,11 +55,8 @@ import Bindings.Libusb                  ( c'libusb_bulk_transfer
                                         , c'LIBUSB_ERROR_TIMEOUT
                                         )
 
--- from transformers:
-import Control.Monad.IO.Class           ( liftIO )
-
 -- from monad-control:
-import Control.Monad.IO.Control         ( MonadControlIO, liftIOOp )
+import Control.Monad.IO.Control         ( MonadControlIO, controlIO )
 
 -- from usb:
 import System.USB.DeviceHandling        ( DeviceHandle )
@@ -92,22 +94,21 @@ import Data.Function.Unicode            ( (∘) )
 import Data.Bool         ( otherwise, not )
 import Data.Int          ( Int )
 import Data.Function     ( id )
-import Data.Functor      ( (<$), fmap )
 import Data.List         ( (++), map )
 import Foreign.Ptr       ( Ptr, nullPtr, plusPtr )
 import Foreign.Storable  ( poke )
 import System.IO         ( IO )
 import Text.Show         ( show )
 import Prelude           ( (*), error, String )
-import Control.Exception ( onException, mask_, uninterruptibleMask_ )
+import Control.Exception ( SomeException, onException, mask, uninterruptibleMask_ )
 
-import qualified
+import
 #if MIN_VERSION_base(4,4,0)
  GHC.Event
 #else
  System.Event
 #endif
-  as EventManager ( registerTimeout, unregisterTimeout )
+   ( registerTimeout, unregisterTimeout )
 
 -- from iteratee:
 import Data.Iteratee.Base ( Iteratee )
@@ -200,122 +201,137 @@ enumReadInterrupt
 #endif
     | otherwise = enumReadSync c'libusb_interrupt_transfer
 
+type Run s m α = Stream s → IO (Restore s m α)
+
+type Restore s m α = m (Iteratee s m α)
+
 #ifdef HAS_EVENT_MANAGER
 --------------------------------------------------------------------------------
 -- Asynchronous
 --------------------------------------------------------------------------------
 
-enumReadAsync ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
+enumReadAsync ∷ ∀ s m α
+              . (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
               ⇒ C'TransferType
               → DeviceHandle → EndpointAddress → Size → Timeout
               → Enumerator s m α
 enumReadAsync transType = \devHndl endpointAddr chunkSize timeout →
-  enum transType
-       0 []
-       devHndl endpointAddr
-       timeout
-       chunkSize $ \transPtr bufferPtr go k _ → do
-         n ← liftIO $ fmap fromIntegral $ peek $ p'libusb_transfer'actual_length transPtr
+  enum transType 0 [] devHndl endpointAddr timeout chunkSize convertResults
+    where
+      convertResults ∷ ConvertResults s m α
+      convertResults transPtr bufferPtr cont stop _ = do
+         n ← peek $ p'libusb_transfer'actual_length transPtr
          if n ≡ 0
-           then return ∘ k $ Chunk empty
-           else liftIO (readFromPtr bufferPtr n) >>= go ∘ k ∘ Chunk
+           then stop $ Chunk empty
+           else readFromPtr bufferPtr (fromIntegral n) >>= cont ∘ Chunk
 
-enum ∷ MonadControlIO m
+type ConvertResults s m α = Ptr C'libusb_transfer → Ptr Word8
+                          → Run s m α -- To continue
+                          → Run s m α -- To stop
+                          → Status
+                          → IO (Restore s m α)
+
+enum ∷ ∀ m s α
+     . MonadControlIO m
      ⇒ C'TransferType
      → Int → [C'libusb_iso_packet_descriptor]
      → DeviceHandle → EndpointAddress
      → Timeout
      → Size
-     → ( Ptr C'libusb_transfer
-       → Ptr Word8
-       → Enumerator s m α
-       → (Stream s → Iteratee s m α)
-       → Status
-       → m (Iteratee s m α)
-       )
+     → ConvertResults s m α
      → Enumerator s m α
 enum transType
      nrOfIsoPackets isoPackageDescs
      devHndl endpointAddr
      timeout
      chunkSize
-     convertResults = \iter → do
-  liftIOOp (allocaBytes chunkSize) $ \bufferPtr →
+     convertResults = \iter →
+  controlIO $ \runInIO →
+    allocaBytes chunkSize $ \bufferPtr →
+      allocaTransfer nrOfIsoPackets $ \transPtr → do
+        lock ← newLock
 
-     liftIOOp (allocaTransfer nrOfIsoPackets) $ \transPtr → do
-       lock ← liftIO newLock
+        let Just (evtMgr, mbHandleEvents) = getEventManager $
+                                              getCtx $
+                                                getDevice devHndl
+            wait ∷ IO ()
+            wait = case mbHandleEvents of
+                     Nothing → acquire lock
+                                 `onException`
+                                   (uninterruptibleMask_ $ do
+                                      _err ← c'libusb_cancel_transfer transPtr
+                                      acquire lock)
+                     Just handleEvents → do
+                       tk ← registerTimeout evtMgr (timeout * 1000) handleEvents
+                       acquire lock
+                         `onException`
+                           (uninterruptibleMask_ $ do
+                              unregisterTimeout evtMgr tk
+                              _err ← c'libusb_cancel_transfer transPtr
+                              acquire lock)
 
-       let Just (evtMgr, mbHandleEvents) = getEventManager $
-                                             getCtx $
-                                               getDevice devHndl
-           wait = case mbHandleEvents of
-                    Nothing → acquire lock
-                                `onException`
-                                  (uninterruptibleMask_ $ do
-                                     _err ← c'libusb_cancel_transfer transPtr
-                                     acquire lock)
-                    Just handleEvents → do
-                      tk ← EventManager.registerTimeout evtMgr
-                                                        (timeout * 1000)
-                                                        handleEvents
-                      acquire lock
-                        `onException`
-                          (uninterruptibleMask_ $ do
-                             EventManager.unregisterTimeout evtMgr tk
-                             _err ← c'libusb_cancel_transfer transPtr
-                             acquire lock)
+        withCallback (\_ → release lock) $ \cbPtr → do
 
-       liftIOOp (withCallback (\_ → release lock)) $ \cbPtr → do
+          poke transPtr $ C'libusb_transfer
+            { c'libusb_transfer'dev_handle      = getDevHndlPtr devHndl
+            , c'libusb_transfer'flags           = 0 -- unused
+            , c'libusb_transfer'endpoint        = marshalEndpointAddress endpointAddr
+            , c'libusb_transfer'type            = transType
+            , c'libusb_transfer'timeout         = fromIntegral timeout
+            , c'libusb_transfer'status          = 0  -- output
+            , c'libusb_transfer'length          = fromIntegral chunkSize
+            , c'libusb_transfer'actual_length   = 0 -- output
+            , c'libusb_transfer'callback        = cbPtr
+            , c'libusb_transfer'user_data       = nullPtr -- unused
+            , c'libusb_transfer'buffer          = castPtr bufferPtr
+            , c'libusb_transfer'num_iso_packets = fromIntegral nrOfIsoPackets
+            , c'libusb_transfer'iso_packet_desc = isoPackageDescs
+            }
 
-         liftIO $ poke transPtr $ C'libusb_transfer
-           { c'libusb_transfer'dev_handle      = getDevHndlPtr devHndl
-           , c'libusb_transfer'flags           = 0 -- unused
-           , c'libusb_transfer'endpoint        = marshalEndpointAddress endpointAddr
-           , c'libusb_transfer'type            = transType
-           , c'libusb_transfer'timeout         = fromIntegral timeout
-           , c'libusb_transfer'status          = 0  -- output
-           , c'libusb_transfer'length          = fromIntegral chunkSize
-           , c'libusb_transfer'actual_length   = 0 -- output
-           , c'libusb_transfer'callback        = cbPtr
-           , c'libusb_transfer'user_data       = nullPtr -- unused
-           , c'libusb_transfer'buffer          = castPtr bufferPtr
-           , c'libusb_transfer'num_iso_packets = fromIntegral nrOfIsoPackets
-           , c'libusb_transfer'iso_packet_desc = isoPackageDescs
-           }
+          let go ∷ Enumerator s m α
+              go i = runIter i idoneM on_cont
 
-         let go i = runIter i idoneM on_cont
+              on_cont ∷ (Stream s → Iteratee s m α)
+                      → Maybe SomeException
+                      → m (Iteratee s m α)
+              on_cont _ (Just e) = return $ throwErr e
+              on_cont k Nothing  = do
+                -- Submit the transfer:
+                controlIO $ \runInIO' →
+                  mask $ \restore → do
 
-             on_cont _ (Just e) = return $ throwErr e
-             on_cont k Nothing  = do
-               -- Submit the transfer:
-               mbE ← liftIO $ mask_ $ do
-                       err ← c'libusb_submit_transfer transPtr
-                       if err ≢ c'LIBUSB_SUCCESS
-                         then return $ Just $ convertUSBException err
-                         else Nothing <$ wait
+                    let stop, cont ∷ Run s m α
+                        stop = return   ∘ return ∘ k
+                        cont = runInIO' ∘ go     ∘ k
 
-               let ex = return ∘ k ∘ EOF ∘ Just ∘ toException
+                        ex ∷ USBException → IO (Restore s m α)
+                        ex = stop ∘ EOF ∘ Just ∘ toException
 
-               case mbE of
-                 Just e → ex e
-                 Nothing → do
-                   let continue = convertResults transPtr bufferPtr go k
-                   status ← liftIO $ peek $ p'libusb_transfer'status transPtr
-                   case status of
-                     ts | ts ≡ c'LIBUSB_TRANSFER_COMPLETED → continue Completed
-                        | ts ≡ c'LIBUSB_TRANSFER_TIMED_OUT → continue TimedOut
+                        continue ∷ Status → IO (Restore s m α)
+                        continue = convertResults transPtr bufferPtr cont stop
 
-                        | ts ≡ c'LIBUSB_TRANSFER_ERROR     → ex ioException
-                        | ts ≡ c'LIBUSB_TRANSFER_NO_DEVICE → ex NoDeviceException
-                        | ts ≡ c'LIBUSB_TRANSFER_OVERFLOW  → ex OverflowException
-                        | ts ≡ c'LIBUSB_TRANSFER_STALL     → ex PipeException
+                    err ← c'libusb_submit_transfer transPtr
+                    if err ≢ c'LIBUSB_SUCCESS
+                      then ex $ convertUSBException err
+                      else do
+                        wait
+                        restore $ do
+                          status ← peek $ p'libusb_transfer'status transPtr
+                          case status of
+                            ts | ts ≡ c'LIBUSB_TRANSFER_COMPLETED → continue Completed
+                               | ts ≡ c'LIBUSB_TRANSFER_TIMED_OUT → continue TimedOut
 
-                        | ts ≡ c'LIBUSB_TRANSFER_CANCELLED →
-                            moduleError "transfer status can't be Cancelled!"
+                               | ts ≡ c'LIBUSB_TRANSFER_ERROR     → ex ioException
+                               | ts ≡ c'LIBUSB_TRANSFER_NO_DEVICE → ex NoDeviceException
+                               | ts ≡ c'LIBUSB_TRANSFER_OVERFLOW  → ex OverflowException
+                               | ts ≡ c'LIBUSB_TRANSFER_STALL     → ex PipeException
 
-                        | otherwise → moduleError $ "Unknown transfer status: "
-                                                      ++ show ts ++ "!"
-         go iter
+                               | ts ≡ c'LIBUSB_TRANSFER_CANCELLED →
+                                   moduleError "transfer status can't be Cancelled!"
+
+                               | otherwise → moduleError $ "Unknown transfer status: "
+                                                             ++ show ts ++ "!"
+          runInIO $ go iter
 
 moduleError ∷ String → error
 moduleError msg = error $ thisModule ++ ": " ++ msg
@@ -336,7 +352,8 @@ needThreadedRTSError msg = moduleError $ msg ++
 --
 -- /WARNING:/ You need to enable the threaded runtime (@-threaded@) for this
 -- function to work correctly. It throws a runtime error otherwise!
-enumReadIsochronous ∷ (ReadableChunk s Word8, MonadControlIO m)
+enumReadIsochronous ∷ ∀ s m α
+                    . (ReadableChunk s Word8, MonadControlIO m)
                     ⇒ DeviceHandle    -- ^ A handle for the device to communicate with.
                     → EndpointAddress -- ^ The address of a valid 'In' and 'Isochronous'
                                       --   endpoint to communicate with. Make sure the
@@ -362,12 +379,12 @@ enumReadIsochronous devHndl endpointAddr sizes timeout
     where
       SumLength totalSize nrOfIsoPackets = sumLength sizes
 
-      convertResults transPtr bufferPtr go k Completed =
-          liftIO (convertIsosToChunks nrOfIsoPackets transPtr bufferPtr)
-            >>= go ∘ k ∘ Chunk
+      convertResults ∷ ConvertResults [s] m α
+      convertResults transPtr bufferPtr cont _ Completed =
+          convertIsosToChunks nrOfIsoPackets transPtr bufferPtr >>= cont ∘ Chunk
 
-      convertResults _ _ _ k TimedOut =
-          return ∘ k ∘ EOF ∘ Just ∘ toException $ TimeoutException
+      convertResults _ _ _ stop TimedOut =
+          stop $ EOF $ Just $ toException $ TimeoutException
 
 convertIsosToChunks ∷ (ReadableChunk s Word8)
                     ⇒ Int → Ptr C'libusb_transfer → Ptr Word8 → IO [s]
@@ -384,7 +401,8 @@ convertIsosToChunks nrOfIsoPackets transPtr bufferPtr =
 -- Synchronous
 --------------------------------------------------------------------------------
 
-enumReadSync ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
+enumReadSync ∷ ∀ s m α
+             . (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
              ⇒ C'TransferFunc → ( DeviceHandle
                                 → EndpointAddress
                                 → Size
@@ -395,24 +413,32 @@ enumReadSync c'transfer = \devHndl
                            endpoint
                            chunkSize
                            timeout → \iter →
-    liftIOOp alloca $ \transferredPtr →
-     liftIOOp (allocaBytes chunkSize) $ \dataPtr →
-        let go i = runIter i idoneM on_cont
+    controlIO $ \runInIO →
+      alloca $ \transferredPtr →
+        allocaBytes chunkSize $ \dataPtr →
+        let go ∷ Enumerator s m α
+            go i = runIter i idoneM on_cont
+
+            on_cont ∷ (Stream s → Iteratee s m α) → Maybe SomeException → m (Iteratee s m α)
             on_cont _ (Just e) = return $ throwErr e
-            on_cont k Nothing  = do
-              err ← liftIO $ c'transfer (getDevHndlPtr devHndl)
-                                        (marshalEndpointAddress endpoint)
-                                        (castPtr dataPtr)
-                                        (fromIntegral chunkSize)
-                                        transferredPtr
-                                        (fromIntegral timeout)
-              if err ≢ c'LIBUSB_SUCCESS ∧
-                 err ≢ c'LIBUSB_ERROR_TIMEOUT
-                then return ∘ k $ EOF $ Just $ toException $ convertUSBException err
-                else do
-                  t ← liftIO $ peek transferredPtr
-                  if t ≡ 0
-                    then return ∘ k $ Chunk empty
-                    else liftIO (readFromPtr dataPtr $ fromIntegral t)
-                           >>= go ∘ k ∘ Chunk
-        in go iter
+            on_cont k Nothing  =
+              controlIO $ \runInIO' → do
+                let stop, cont ∷ Run s m α
+                    stop = return   ∘ return ∘ k
+                    cont = runInIO' ∘ go     ∘ k
+
+                err ← c'transfer (getDevHndlPtr devHndl)
+                                 (marshalEndpointAddress endpoint)
+                                 (castPtr dataPtr)
+                                 (fromIntegral chunkSize)
+                                 transferredPtr
+                                 (fromIntegral timeout)
+                if err ≢ c'LIBUSB_SUCCESS ∧
+                   err ≢ c'LIBUSB_ERROR_TIMEOUT
+                  then stop $ EOF $ Just $ toException $ convertUSBException err
+                  else do
+                    t ← peek transferredPtr
+                    if t ≡ 0
+                      then stop $ Chunk empty
+                      else readFromPtr dataPtr (fromIntegral t) >>= cont ∘ Chunk
+        in runInIO $ go iter
