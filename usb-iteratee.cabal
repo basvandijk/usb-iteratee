@@ -7,6 +7,7 @@ license-file:  LICENSE
 copyright:     2011 Bas van Dijk <v.dijk.bas@gmail.com>
 author:        Bas van Dijk <v.dijk.bas@gmail.com>
 maintainer:    Bas van Dijk <v.dijk.bas@gmail.com>
+homepage:      https://github.com/basvandijk/usb-iteratee/
 bug-reports:   https://github.com/basvandijk/usb-iteratee/issues
 stability:     experimental
 category:      System
