@@ -101,9 +101,13 @@ import Text.Show         ( show )
 import Prelude           ( (*), error, String )
 import Control.Exception ( onException, mask_, uninterruptibleMask_ )
 
-import qualified System.Event as EventManager ( registerTimeout
-                                              , unregisterTimeout
-                                              )
+import qualified
+#if MIN_VERSION_base(4,4,0)
+ GHC.Event
+#else
+ System.Event
+#endif
+  as EventManager ( registerTimeout, unregisterTimeout )
 
 -- from iteratee:
 import Data.Iteratee.Base ( Iteratee )
