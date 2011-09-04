@@ -92,7 +92,7 @@ import Data.Function.Unicode            ( (∘) )
 import Data.Bool         ( otherwise, not )
 import Data.Int          ( Int )
 import Data.Function     ( id )
-import Data.Functor      ( (<$) )
+import Data.Functor      ( (<$), fmap )
 import Data.List         ( (++), map )
 import Foreign.Ptr       ( Ptr, nullPtr, plusPtr )
 import Foreign.Storable  ( poke )
@@ -130,6 +130,9 @@ import Bindings.Libusb ( c'LIBUSB_TRANSFER_TYPE_BULK
 
                        , c'libusb_submit_transfer
                        , c'libusb_cancel_transfer
+
+                       , p'libusb_transfer'status
+                       , p'libusb_transfer'actual_length
                        )
 
 -- from usb:
@@ -211,10 +214,11 @@ enumReadAsync transType = \devHndl endpointAddr chunkSize timeout →
        0 []
        devHndl endpointAddr
        timeout
-       chunkSize $ \_ bufferPtr n go k _ →
+       chunkSize $ \transPtr bufferPtr go k _ → do
+         n ← liftIO $ fmap fromIntegral $ peek $ p'libusb_transfer'actual_length transPtr
          if n ≡ 0
-         then return ∘ k $ Chunk empty
-         else liftIO (readFromPtr bufferPtr n) >>= go ∘ k ∘ Chunk
+           then return ∘ k $ Chunk empty
+           else liftIO (readFromPtr bufferPtr n) >>= go ∘ k ∘ Chunk
 
 enum ∷ MonadControlIO m
      ⇒ C'TransferType
@@ -223,7 +227,7 @@ enum ∷ MonadControlIO m
      → Timeout
      → Size
      → ( Ptr C'libusb_transfer
-       → Ptr Word8 → Size
+       → Ptr Word8
        → Enumerator s m α
        → (Stream s → Iteratee s m α)
        → Status
@@ -295,14 +299,11 @@ enum transType
                case mbE of
                  Just e → ex e
                  Nothing → do
-                   trans ← liftIO $ peek transPtr
-
-                   let n = fromIntegral $ c'libusb_transfer'actual_length trans
-                       c = convertResults transPtr bufferPtr n go k
-
-                   case c'libusb_transfer'status trans of
-                     ts | ts ≡ c'LIBUSB_TRANSFER_COMPLETED → c Completed
-                        | ts ≡ c'LIBUSB_TRANSFER_TIMED_OUT → c TimedOut
+                   let continue = convertResults transPtr bufferPtr go k
+                   status ← liftIO $ peek $ p'libusb_transfer'status transPtr
+                   case status of
+                     ts | ts ≡ c'LIBUSB_TRANSFER_COMPLETED → continue Completed
+                        | ts ≡ c'LIBUSB_TRANSFER_TIMED_OUT → continue TimedOut
 
                         | ts ≡ c'LIBUSB_TRANSFER_ERROR     → ex ioException
                         | ts ≡ c'LIBUSB_TRANSFER_NO_DEVICE → ex NoDeviceException
@@ -361,11 +362,11 @@ enumReadIsochronous devHndl endpointAddr sizes timeout
     where
       SumLength totalSize nrOfIsoPackets = sumLength sizes
 
-      convertResults transPtr bufferPtr _ go k Completed =
+      convertResults transPtr bufferPtr go k Completed =
           liftIO (convertIsosToChunks nrOfIsoPackets transPtr bufferPtr)
             >>= go ∘ k ∘ Chunk
 
-      convertResults _ _ _ _ k TimedOut =
+      convertResults _ _ _ k TimedOut =
           return ∘ k ∘ EOF ∘ Just ∘ toException $ TimeoutException
 
 convertIsosToChunks ∷ (ReadableChunk s Word8)
