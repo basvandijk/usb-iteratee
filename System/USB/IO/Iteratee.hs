@@ -142,6 +142,7 @@ import System.USB.Exceptions     ( USBException(..), ioException )
 #ifdef __HADDOCK__
 import System.USB.Descriptors    ( TransferType(Isochronous), maxIsoPacketSize )
 #endif
+import System.USB.IO             ( noTimeout )
 import System.USB.Internal       ( threaded
                                  , C'TransferType
                                  , allocaTransfer, withCallback
@@ -254,26 +255,25 @@ enum transType
       allocaBytes chunkSize $ \bufferPtr →
         allocaTransfer nrOfIsoPackets $ \transPtr → do
           lock ← newLock
-          withCallback (\_ → release lock) $ \cbPtr → do
-
-            let Just (evtMgr, mbHandleEvents) = getEventManager $
-                                                  getCtx $
-                                                    getDevice devHndl
-                waitForTermination =
-                    case mbHandleEvents of
-                      Nothing → acquire lock
-                                  `onException`
-                                    (uninterruptibleMask_ $ do
-                                       _err ← c'libusb_cancel_transfer transPtr
-                                       acquire lock)
-                      Just handleEvents → do
-                        tk ← registerTimeout evtMgr (timeout * 1000) handleEvents
-                        acquire lock
+          let Just (evtMgr, mbHandleEvents) = getEventManager $
+                                                getCtx $
+                                                  getDevice devHndl
+              waitForTermination =
+                  case mbHandleEvents of
+                    Just handleEvents | timeout ≢ noTimeout → do
+                      tk ← registerTimeout evtMgr (timeout * 1000) handleEvents
+                      acquire lock
+                        `onException`
+                          (uninterruptibleMask_ $ do
+                             unregisterTimeout evtMgr tk
+                             _err ← c'libusb_cancel_transfer transPtr
+                             acquire lock)
+                    _ → acquire lock
                           `onException`
                             (uninterruptibleMask_ $ do
-                               unregisterTimeout evtMgr tk
                                _err ← c'libusb_cancel_transfer transPtr
                                acquire lock)
+          withCallback (\_ → release lock) $ \cbPtr → do
 
             poke transPtr $ C'libusb_transfer
               { c'libusb_transfer'dev_handle      = devHndlPtr
