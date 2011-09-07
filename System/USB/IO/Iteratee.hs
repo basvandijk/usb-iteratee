@@ -424,6 +424,9 @@ enumReadSync c'transfer = \devHndl
                         stop = return   ∘ return ∘ k
                         cont = runInIO' ∘ go     ∘ k
 
+                        ex ∷ USBException → IO (Restore s m α)
+                        ex = stop ∘ EOF ∘ Just ∘ toException
+
                     err ← c'transfer devHndlPtr
                                      (marshalEndpointAddress endpoint)
                                      (castPtr dataPtr)
@@ -433,7 +436,7 @@ enumReadSync c'transfer = \devHndl
 
                     if err ≢ c'LIBUSB_SUCCESS ∧
                        err ≢ c'LIBUSB_ERROR_TIMEOUT
-                      then stop $ EOF $ Just $ toException $ convertUSBException err
+                      then ex $ convertUSBException err
                       else do
                         t ← peek transferredPtr
                         if t ≡ 0
