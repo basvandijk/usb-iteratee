@@ -389,7 +389,7 @@ enumReadIsochronous devHndl endpointAddr sizes timeout
                 s ← readFromPtr ptr (fromIntegral a)
                 go (ptr `plusPtr` fromIntegral l) (ss ∘ (s:)) ds
 
-      onTimeout _ _ _ stop = stop $ EOF $ Just $ toException $ TimeoutException
+      onTimeout _ _ _ stop = stop ∘ EOF ∘ Just ∘ toException $ TimeoutException
 #endif
 
 --------------------------------------------------------------------------------
@@ -424,9 +424,6 @@ enumReadSync c'transfer = \devHndl
                         stop = return   ∘ return ∘ k
                         cont = runInIO' ∘ go     ∘ k
 
-                        ex ∷ USBException → IO (Restore s m α)
-                        ex = stop ∘ EOF ∘ Just ∘ toException
-
                     err ← c'transfer devHndlPtr
                                      (marshalEndpointAddress endpoint)
                                      (castPtr dataPtr)
@@ -436,7 +433,7 @@ enumReadSync c'transfer = \devHndl
 
                     if err ≢ c'LIBUSB_SUCCESS ∧
                        err ≢ c'LIBUSB_ERROR_TIMEOUT
-                      then ex $ convertUSBException err
+                      then stop ∘ EOF ∘ Just ∘ toException $ convertUSBException err
                       else do
                         t ← peek transferredPtr
                         if t ≡ 0
