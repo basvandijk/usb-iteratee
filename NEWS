@@ -1,3 +1,20 @@
+0.4
+
+(Released on: Mon Sep 12 19:50:49 UTC 2011)
+
+* Renamed package from usb-enumerator to usb-iteratee.
+  This makes it more clear that this package provides iteratee
+  enumerators instead of the enumerators from the enumerator package.
+
+* Renamed System.USB.IO.Synchronous.Enumerator to System.USB.IO.Iteratee.
+
+* The enumerators now use an asynchronous implementation when support
+  for the GHC event manager is available. This should be more
+  efficient.
+
+* Support for an isochronous enumerator.
+
+
 0.3
 
 (Released on: Wed Mar 9 12:22:02 UTC 2011)
