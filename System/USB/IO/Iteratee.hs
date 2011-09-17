@@ -5,6 +5,10 @@
            , ScopedTypeVariables
   #-}
 
+#ifdef HAS_EVENT_MANAGER
+{-# LANGUAGE PatternGuards #-}
+#endif
+
 --------------------------------------------------------------------------------
 -- |
 -- Module      :  System.USB.IO.Iteratee
@@ -91,7 +95,7 @@ import Data.Function.Unicode            ( (∘) )
 #ifdef HAS_EVENT_MANAGER
 --------------------------------------------------------------------------------
 -- from base:
-import Data.Bool         ( otherwise, not )
+import Data.Bool         ( otherwise )
 import Data.Int          ( Int )
 import Data.Function     ( id )
 import Data.List         ( (++), map )
@@ -108,7 +112,7 @@ import
 #else
  System.Event
 #endif
-   ( registerTimeout, unregisterTimeout )
+   ( EventManager, registerTimeout, unregisterTimeout )
 
 -- from iteratee:
 import Data.Iteratee.Base ( Iteratee )
@@ -137,20 +141,18 @@ import Bindings.Libusb ( c'LIBUSB_TRANSFER_TYPE_BULK
                        )
 
 -- from usb:
-import System.USB.DeviceHandling ( getDevice )
 import System.USB.Exceptions     ( USBException(..), ioException )
 #ifdef __HADDOCK__
 import System.USB.Descriptors    ( TransferType(Isochronous), maxIsoPacketSize )
 #endif
 import System.USB.IO             ( noTimeout )
-import System.USB.Internal       ( threaded
+import System.USB.Internal       ( getEvtMgr
                                  , C'TransferType
                                  , allocaTransfer, withCallback
                                  , newLock, acquire, release
                                  , SumLength(..), sumLength
                                  , peekIsoPacketDescs
                                  , initIsoPacketDesc
-                                 , getCtx, getEventManager
                                  )
 #endif
 
@@ -172,11 +174,12 @@ enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
                                --   should wait for each chunk before giving up
                                --   due to no response being received.
              → Enumerator s m α
-enumReadBulk
+enumReadBulk devHndl
 #ifdef HAS_EVENT_MANAGER
-    | threaded  = enumReadAsync c'LIBUSB_TRANSFER_TYPE_BULK
+    | Just evtMgrHndlEvts ← getEvtMgr devHndl =
+        enumReadAsync evtMgrHndlEvts c'LIBUSB_TRANSFER_TYPE_BULK devHndl
 #endif
-    | otherwise = enumReadSync c'libusb_bulk_transfer
+    | otherwise = enumReadSync c'libusb_bulk_transfer devHndl
 
 -- | Iteratee enumerator for reading /interrupt/ endpoints.
 enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
@@ -195,11 +198,12 @@ enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
                                     --   before giving up due to no response
                                     --   being received.
                   → Enumerator s m α
-enumReadInterrupt
+enumReadInterrupt devHndl
 #ifdef HAS_EVENT_MANAGER
-    | threaded  = enumReadAsync c'LIBUSB_TRANSFER_TYPE_INTERRUPT
+    | Just evtMgrHndlEvts ← getEvtMgr devHndl =
+        enumReadAsync evtMgrHndlEvts c'LIBUSB_TRANSFER_TYPE_INTERRUPT devHndl
 #endif
-    | otherwise = enumReadSync c'libusb_interrupt_transfer
+    | otherwise = enumReadSync c'libusb_interrupt_transfer devHndl
 
 type Run s m α = Stream s → IO (Restore s m α)
 
@@ -212,11 +216,13 @@ type Restore s m α = m (Iteratee s m α)
 
 enumReadAsync ∷ ∀ s m α
               . (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
-              ⇒ C'TransferType
+              ⇒ (EventManager, Maybe (IO ()))
+              → C'TransferType
               → DeviceHandle → EndpointAddress → Size → Timeout
               → Enumerator s m α
-enumReadAsync transType = \devHndl endpointAddr chunkSize timeout →
-  enum transType
+enumReadAsync evtMgrHndlEvts transType = \devHndl endpointAddr chunkSize timeout →
+  enum evtMgrHndlEvts
+       transType
        0 []
        devHndl endpointAddr
        timeout
@@ -237,14 +243,16 @@ type WithResult s m α = Ptr C'libusb_transfer → Ptr Word8
 
 enum ∷ ∀ m s α
      . MonadControlIO m
-     ⇒ C'TransferType
+     ⇒ (EventManager, Maybe (IO ()))
+     → C'TransferType
      → Int → [C'libusb_iso_packet_descriptor]
      → DeviceHandle → EndpointAddress
      → Timeout
      → Size
      → WithResult s m α → WithResult s m α
      → Enumerator s m α
-enum transType
+enum (evtMgr, mbHandleEvents)
+     transType
      nrOfIsoPackets isoPackageDescs
      devHndl endpointAddr
      timeout
@@ -255,10 +263,7 @@ enum transType
       allocaBytes chunkSize $ \bufferPtr →
         allocaTransfer nrOfIsoPackets $ \transPtr → do
           lock ← newLock
-          let Just (evtMgr, mbHandleEvents) = getEventManager $
-                                                getCtx $
-                                                  getDevice devHndl
-              waitForTermination =
+          let waitForTermination =
                   case mbHandleEvents of
                     Just handleEvents | timeout ≢ noTimeout → do
                       tk ← registerTimeout evtMgr (timeout * 1000) handleEvents
@@ -370,13 +375,15 @@ enumReadIsochronous ∷ ∀ s m α
                                       --   being received.
                     → Enumerator [s] m α
 enumReadIsochronous devHndl endpointAddr sizes timeout
-    | not threaded = needThreadedRTSError "enumReadIsochronous"
-    | otherwise    = enum c'LIBUSB_TRANSFER_TYPE_ISOCHRONOUS
-                          nrOfIsoPackets (map initIsoPacketDesc sizes)
-                          devHndl endpointAddr
-                          timeout
-                          totalSize
-                          onCompletion onTimeout
+    | Just evtMgrHndlEvts ← getEvtMgr devHndl =
+        enum evtMgrHndlEvts
+             c'LIBUSB_TRANSFER_TYPE_ISOCHRONOUS
+             nrOfIsoPackets (map initIsoPacketDesc sizes)
+             devHndl endpointAddr
+             timeout
+             totalSize
+             onCompletion onTimeout
+    | otherwise = needThreadedRTSError "enumReadIsochronous"
     where
       SumLength totalSize nrOfIsoPackets = sumLength sizes
 
