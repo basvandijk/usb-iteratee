@@ -38,6 +38,7 @@ import Prelude                          ( fromIntegral )
 import Data.Function                    ( ($) )
 import Data.Word                        ( Word8 )
 import Data.Maybe                       ( Maybe(Nothing, Just) )
+import Control.Exception                ( toException )
 import Control.Monad                    ( (>>=), return )
 import Foreign.Storable                 ( peek )
 import Foreign.Ptr                      ( castPtr )
@@ -50,6 +51,7 @@ import Control.Monad                    ( fail )
 
 -- from base-unicode-symbols:
 import Data.Eq.Unicode                  ( (≡), (≢) )
+import Data.Function.Unicode            ( (∘) )
 import Data.Bool.Unicode                ( (∧) )
 
 -- from bindings-libusb:
@@ -85,12 +87,6 @@ import Data.Iteratee.Base               ( Stream(EOF, Chunk), runIter, idoneM )
 import Data.Iteratee.Iteratee           ( Enumerator, throwErr )
 import Data.Iteratee.Base.ReadableChunk ( ReadableChunk(readFromPtr) )
 import Data.NullPoint                   ( NullPoint(empty) )
-
--- from base:
-import Control.Exception                ( toException )
-
--- from base-unicode-symbols:
-import Data.Function.Unicode            ( (∘) )
 
 #ifdef HAS_EVENT_MANAGER
 --------------------------------------------------------------------------------
