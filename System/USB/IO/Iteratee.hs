@@ -62,7 +62,7 @@ import Bindings.Libusb                  ( c'libusb_bulk_transfer
                                         )
 
 -- from monad-control:
-import Control.Monad.IO.Control         ( MonadControlIO, controlIO )
+import Control.Monad.Trans.Control      ( MonadBaseControl, StM, control )
 
 -- from usb:
 import System.USB.DeviceHandling        ( DeviceHandle )
@@ -99,16 +99,8 @@ import Foreign.Ptr       ( Ptr, nullPtr, plusPtr )
 import Foreign.Storable  ( poke )
 import System.IO         ( IO )
 import Text.Show         ( show )
-import Prelude           ( (*), error, String )
-import Control.Exception ( SomeException, onException, mask, uninterruptibleMask_ )
-
-import
-#if MIN_VERSION_base(4,4,0)
- GHC.Event
-#else
- System.Event
-#endif
-   ( EventManager, registerTimeout, unregisterTimeout )
+import Prelude           ( error, String )
+import Control.Exception ( SomeException, mask )
 
 -- from iteratee:
 import Data.Iteratee.Base ( Iteratee )
@@ -130,7 +122,6 @@ import Bindings.Libusb ( c'LIBUSB_TRANSFER_TYPE_BULK
                        , C'libusb_transfer(..)
 
                        , c'libusb_submit_transfer
-                       , c'libusb_cancel_transfer
 
                        , p'libusb_transfer'status
                        , p'libusb_transfer'actual_length
@@ -141,11 +132,10 @@ import System.USB.Exceptions     ( USBException(..), ioException )
 #ifdef __HADDOCK__
 import System.USB.Descriptors    ( TransferType(Isochronous), maxIsoPacketSize )
 #endif
-import System.USB.IO             ( noTimeout )
-import System.USB.Internal       ( getEvtMgr
+import System.USB.Internal       ( getWait, Wait
                                  , C'TransferType
                                  , allocaTransfer, withCallback
-                                 , newLock, acquire, release
+                                 , newLock, release
                                  , SumLength(..), sumLength
                                  , peekIsoPacketDescs
                                  , initIsoPacketDesc
@@ -157,7 +147,7 @@ import System.USB.Internal       ( getEvtMgr
 --------------------------------------------------------------------------------
 
 -- | Iteratee enumerator for reading /bulk/ endpoints.
-enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
+enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadBaseControl IO m)
              ⇒ DeviceHandle    -- ^ A handle for the device to communicate with.
              → EndpointAddress -- ^ The address of a valid 'In' and 'Bulk'
                                --   endpoint to communicate with. Make sure the
@@ -172,13 +162,13 @@ enumReadBulk ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
              → Enumerator s m α
 enumReadBulk devHndl
 #ifdef HAS_EVENT_MANAGER
-    | Just evtMgrHndlEvts ← getEvtMgr devHndl =
-        enumReadAsync evtMgrHndlEvts c'LIBUSB_TRANSFER_TYPE_BULK devHndl
+    | Just wait ← getWait devHndl =
+        enumReadAsync wait c'LIBUSB_TRANSFER_TYPE_BULK devHndl
 #endif
     | otherwise = enumReadSync c'libusb_bulk_transfer devHndl
 
 -- | Iteratee enumerator for reading /interrupt/ endpoints.
-enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
+enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadBaseControl IO m)
                   ⇒ DeviceHandle    -- ^ A handle for the device to communicate
                                     --   with.
                   → EndpointAddress -- ^ The address of a valid 'In' and
@@ -196,14 +186,12 @@ enumReadInterrupt ∷ (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
                   → Enumerator s m α
 enumReadInterrupt devHndl
 #ifdef HAS_EVENT_MANAGER
-    | Just evtMgrHndlEvts ← getEvtMgr devHndl =
-        enumReadAsync evtMgrHndlEvts c'LIBUSB_TRANSFER_TYPE_INTERRUPT devHndl
+    | Just wait ← getWait devHndl =
+        enumReadAsync wait c'LIBUSB_TRANSFER_TYPE_INTERRUPT devHndl
 #endif
     | otherwise = enumReadSync c'libusb_interrupt_transfer devHndl
 
-type Run s m α = Stream s → IO (Restore s m α)
-
-type Restore s m α = m (Iteratee s m α)
+type Run s m α = Stream s → IO (StM m (Iteratee s m α))
 
 #ifdef HAS_EVENT_MANAGER
 --------------------------------------------------------------------------------
@@ -211,13 +199,13 @@ type Restore s m α = m (Iteratee s m α)
 --------------------------------------------------------------------------------
 
 enumReadAsync ∷ ∀ s m α
-              . (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
-              ⇒ (EventManager, Maybe (IO ()))
+              . (ReadableChunk s Word8, NullPoint s, MonadBaseControl IO m)
+              ⇒ Wait
               → C'TransferType
               → DeviceHandle → EndpointAddress → Size → Timeout
               → Enumerator s m α
-enumReadAsync evtMgrHndlEvts transType = \devHndl endpointAddr chunkSize timeout →
-  enum evtMgrHndlEvts
+enumReadAsync wait transType = \devHndl endpointAddr chunkSize timeout →
+  enum wait
        transType
        0 []
        devHndl endpointAddr
@@ -235,11 +223,11 @@ enumReadAsync evtMgrHndlEvts transType = \devHndl endpointAddr chunkSize timeout
 type WithResult s m α = Ptr C'libusb_transfer → Ptr Word8
                       → Run s m α -- To continue
                       → Run s m α -- To stop
-                      → IO (Restore s m α)
+                      → IO (StM m (Iteratee s m α))
 
 enum ∷ ∀ m s α
-     . MonadControlIO m
-     ⇒ (EventManager, Maybe (IO ()))
+     . MonadBaseControl IO m
+     ⇒ Wait
      → C'TransferType
      → Int → [C'libusb_iso_packet_descriptor]
      → DeviceHandle → EndpointAddress
@@ -247,33 +235,18 @@ enum ∷ ∀ m s α
      → Size
      → WithResult s m α → WithResult s m α
      → Enumerator s m α
-enum (evtMgr, mbHandleEvents)
+enum wait
      transType
      nrOfIsoPackets isoPackageDescs
      devHndl endpointAddr
      timeout
      chunkSize
      onCompletion onTimeout = \iter →
-  controlIO $ \runInIO →
+  control $ \runInIO →
     withDevHndlPtr devHndl $ \devHndlPtr →
       allocaBytes chunkSize $ \bufferPtr →
         allocaTransfer nrOfIsoPackets $ \transPtr → do
           lock ← newLock
-          let waitForTermination =
-                  case mbHandleEvents of
-                    Just handleEvents | timeout ≢ noTimeout → do
-                      tk ← registerTimeout evtMgr (timeout * 1000) handleEvents
-                      acquire lock
-                        `onException`
-                          (uninterruptibleMask_ $ do
-                             unregisterTimeout evtMgr tk
-                             _err ← c'libusb_cancel_transfer transPtr
-                             acquire lock)
-                    _ → acquire lock
-                          `onException`
-                            (uninterruptibleMask_ $ do
-                               _err ← c'libusb_cancel_transfer transPtr
-                               acquire lock)
           withCallback (\_ → release lock) $ \cbPtr → do
 
             poke transPtr $ C'libusb_transfer
@@ -292,7 +265,10 @@ enum (evtMgr, mbHandleEvents)
               , c'libusb_transfer'iso_packet_desc = isoPackageDescs
               }
 
-            let go ∷ Enumerator s m α
+            let waitForTermination ∷ IO ()
+                waitForTermination = wait timeout lock transPtr
+
+                go ∷ Enumerator s m α
                 go i = runIter i idoneM on_cont
 
                 on_cont ∷ (Stream s → Iteratee s m α)
@@ -300,14 +276,14 @@ enum (evtMgr, mbHandleEvents)
                         → m (Iteratee s m α)
                 on_cont _ (Just e) = return $ throwErr e
                 on_cont k Nothing  =
-                  controlIO $ \runInIO' →
+                  control $ \runInIO' →
                     mask $ \restore → do
 
                       let stop, cont ∷ Run s m α
-                          stop = return   ∘ return ∘ k
+                          stop = runInIO' ∘ return ∘ k
                           cont = runInIO' ∘ go     ∘ k
 
-                          ex ∷ USBException → IO (Restore s m α)
+                          ex ∷ USBException → IO (StM m (Iteratee s m α))
                           ex = stop ∘ EOF ∘ Just ∘ toException
 
                       err ← c'libusb_submit_transfer transPtr
@@ -355,7 +331,7 @@ needThreadedRTSError msg = moduleError $ msg ++
 -- /WARNING:/ You need to enable the threaded runtime (@-threaded@) for this
 -- function to work correctly. It throws a runtime error otherwise!
 enumReadIsochronous ∷ ∀ s m α
-                    . (ReadableChunk s Word8, MonadControlIO m)
+                    . (ReadableChunk s Word8, MonadBaseControl IO m)
                     ⇒ DeviceHandle    -- ^ A handle for the device to communicate with.
                     → EndpointAddress -- ^ The address of a valid 'In' and 'Isochronous'
                                       --   endpoint to communicate with. Make sure the
@@ -371,8 +347,8 @@ enumReadIsochronous ∷ ∀ s m α
                                       --   being received.
                     → Enumerator [s] m α
 enumReadIsochronous devHndl endpointAddr sizes timeout
-    | Just evtMgrHndlEvts ← getEvtMgr devHndl =
-        enum evtMgrHndlEvts
+    | Just wait ← getWait devHndl =
+        enum wait
              c'LIBUSB_TRANSFER_TYPE_ISOCHRONOUS
              nrOfIsoPackets (map initIsoPacketDesc sizes)
              devHndl endpointAddr
@@ -400,7 +376,7 @@ enumReadIsochronous devHndl endpointAddr sizes timeout
 --------------------------------------------------------------------------------
 
 enumReadSync ∷ ∀ s m α
-             . (ReadableChunk s Word8, NullPoint s, MonadControlIO m)
+             . (ReadableChunk s Word8, NullPoint s, MonadBaseControl IO m)
              ⇒ C'TransferFunc → ( DeviceHandle
                                 → EndpointAddress
                                 → Size
@@ -411,7 +387,7 @@ enumReadSync c'transfer = \devHndl
                            endpoint
                            chunkSize
                            timeout → \iter →
-    controlIO $ \runInIO →
+    control $ \runInIO →
       withDevHndlPtr devHndl $ \devHndlPtr →
         alloca $ \transferredPtr →
           allocaBytes chunkSize $ \dataPtr →
@@ -421,10 +397,10 @@ enumReadSync c'transfer = \devHndl
                 on_cont ∷ (Stream s → Iteratee s m α) → Maybe SomeException → m (Iteratee s m α)
                 on_cont _ (Just e) = return $ throwErr e
                 on_cont k Nothing  =
-                  controlIO $ \runInIO' → do
+                  control $ \runInIO' → do
 
                     let stop, cont ∷ Run s m α
-                        stop = return   ∘ return ∘ k
+                        stop = runInIO' ∘ return ∘ k
                         cont = runInIO' ∘ go     ∘ k
 
                     err ← c'transfer devHndlPtr
