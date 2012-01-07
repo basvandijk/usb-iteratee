@@ -10,7 +10,7 @@ maintainer:    Bas van Dijk <v.dijk.bas@gmail.com>
 homepage:      https://github.com/basvandijk/usb-iteratee
 bug-reports:   https://github.com/basvandijk/usb-iteratee/issues
 stability:     experimental
-category:      System
+category:      System, Hardware
 synopsis:      Iteratee enumerators for the usb package
 description:   This packages provides @iteratee@ enumerators for the @usb@ package.
 
