@@ -5,6 +5,10 @@
            , ScopedTypeVariables
   #-}
 
+#if __GLASGOW_HASKELL__ >= 704
+{-# LANGUAGE Trustworthy #-}
+#endif
+
 #ifdef HAS_EVENT_MANAGER
 {-# LANGUAGE PatternGuards #-}
 #endif
