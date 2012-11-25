@@ -59,11 +59,7 @@ import Data.Function.Unicode            ( (∘) )
 import Data.Bool.Unicode                ( (∧) )
 
 -- from bindings-libusb:
-import Bindings.Libusb                  ( c'libusb_bulk_transfer
-                                        , c'libusb_interrupt_transfer
-                                        , c'LIBUSB_SUCCESS
-                                        , c'LIBUSB_ERROR_TIMEOUT
-                                        )
+import Bindings.Libusb
 
 -- from monad-control:
 import Control.Monad.Trans.Control      ( MonadBaseControl, StM, control )
@@ -95,41 +91,28 @@ import Data.NullPoint                   ( NullPoint(empty) )
 #ifdef HAS_EVENT_MANAGER
 --------------------------------------------------------------------------------
 -- from base:
-import Data.Bool         ( otherwise )
-import Data.Int          ( Int )
-import Data.Function     ( id )
-import Data.List         ( (++), map )
-import Foreign.Ptr       ( Ptr, nullPtr, plusPtr )
-import Foreign.Storable  ( poke )
-import System.IO         ( IO )
-import Text.Show         ( show )
-import Prelude           ( error, String )
-import Control.Exception ( SomeException, mask )
+import Data.Bool             ( otherwise )
+import Data.List             ( (++) )
+import Data.Ord              ( (<) )
+import Foreign.Ptr           ( Ptr, plusPtr )
+import Foreign.Storable      ( poke )
+import Foreign.Marshal.Array ( advancePtr )
+import System.IO             ( IO )
+import Text.Show             ( show )
+import Prelude               ( (+), error, String )
+import Control.Exception     ( SomeException, mask )
 
 -- from iteratee:
 import Data.Iteratee.Base ( Iteratee )
 
--- from bindings-libusb:
-import Bindings.Libusb ( c'LIBUSB_TRANSFER_TYPE_BULK
-                       , c'LIBUSB_TRANSFER_TYPE_INTERRUPT
-                       , c'LIBUSB_TRANSFER_TYPE_ISOCHRONOUS
-
-                       , c'LIBUSB_TRANSFER_COMPLETED
-                       , c'LIBUSB_TRANSFER_TIMED_OUT
-                       , c'LIBUSB_TRANSFER_ERROR
-                       , c'LIBUSB_TRANSFER_NO_DEVICE
-                       , c'LIBUSB_TRANSFER_OVERFLOW
-                       , c'LIBUSB_TRANSFER_STALL
-                       , c'LIBUSB_TRANSFER_CANCELLED
-
-                       , C'libusb_iso_packet_descriptor(..)
-                       , C'libusb_transfer(..)
-
-                       , c'libusb_submit_transfer
-
-                       , p'libusb_transfer'status
-                       , p'libusb_transfer'actual_length
-                       )
+-- from vector:
+import           Data.Vector                      ( Vector )
+import qualified Data.Vector.Unboxed  as Unboxed  ( Vector )
+import qualified Data.Vector.Storable as Storable ( Vector )
+import qualified Data.Vector.Generic  as VG       ( empty, length, map, sum
+                                                  , convert, unsafeFreeze
+                                                  )
+import qualified Data.Vector.Generic.Mutable as VGM ( unsafeNew, unsafeWrite )
 
 -- from usb:
 import System.USB.Exceptions     ( USBException(..), ioException )
@@ -140,8 +123,7 @@ import System.USB.Internal       ( getWait, Wait
                                  , C'TransferType
                                  , allocaTransfer, withCallback
                                  , newLock, release
-                                 , SumLength(..), sumLength
-                                 , peekIsoPacketDescs
+                                 , pokeVector
                                  , initIsoPacketDesc
                                  )
 #endif
@@ -211,7 +193,7 @@ enumReadAsync ∷ ∀ s m α
 enumReadAsync wait transType = \devHndl endpointAddr chunkSize timeout →
   enum wait
        transType
-       0 []
+       VG.empty
        devHndl endpointAddr
        timeout
        chunkSize
@@ -233,7 +215,7 @@ enum ∷ ∀ m s α
      . MonadBaseControl IO m
      ⇒ Wait
      → C'TransferType
-     → Int → [C'libusb_iso_packet_descriptor]
+     → Storable.Vector C'libusb_iso_packet_descriptor
      → DeviceHandle → EndpointAddress
      → Timeout
      → Size
@@ -241,33 +223,28 @@ enum ∷ ∀ m s α
      → Enumerator s m α
 enum wait
      transType
-     nrOfIsoPackets isoPackageDescs
+     isos
      devHndl endpointAddr
      timeout
      chunkSize
      onCompletion onTimeout = \iter →
   control $ \runInIO →
     withDevHndlPtr devHndl $ \devHndlPtr →
-      allocaBytes chunkSize $ \bufferPtr →
-        allocaTransfer nrOfIsoPackets $ \transPtr → do
+      allocaBytes chunkSize $ \bufferPtr → do
+        let nrOfIsos = VG.length isos
+        allocaTransfer nrOfIsos $ \transPtr → do
           lock ← newLock
           withCallback (\_ → release lock) $ \cbPtr → do
+            poke (p'libusb_transfer'dev_handle      transPtr) devHndlPtr
+            poke (p'libusb_transfer'endpoint        transPtr) (marshalEndpointAddress endpointAddr)
+            poke (p'libusb_transfer'type            transPtr) transType
+            poke (p'libusb_transfer'timeout         transPtr) (fromIntegral timeout)
+            poke (p'libusb_transfer'length          transPtr) (fromIntegral chunkSize)
+            poke (p'libusb_transfer'callback        transPtr) cbPtr
+            poke (p'libusb_transfer'buffer          transPtr) (castPtr bufferPtr)
+            poke (p'libusb_transfer'num_iso_packets transPtr) (fromIntegral nrOfIsos)
 
-            poke transPtr $ C'libusb_transfer
-              { c'libusb_transfer'dev_handle      = devHndlPtr
-              , c'libusb_transfer'flags           = 0 -- unused
-              , c'libusb_transfer'endpoint        = marshalEndpointAddress endpointAddr
-              , c'libusb_transfer'type            = transType
-              , c'libusb_transfer'timeout         = fromIntegral timeout
-              , c'libusb_transfer'status          = 0  -- output
-              , c'libusb_transfer'length          = fromIntegral chunkSize
-              , c'libusb_transfer'actual_length   = 0 -- output
-              , c'libusb_transfer'callback        = cbPtr
-              , c'libusb_transfer'user_data       = nullPtr -- unused
-              , c'libusb_transfer'buffer          = castPtr bufferPtr
-              , c'libusb_transfer'num_iso_packets = fromIntegral nrOfIsoPackets
-              , c'libusb_transfer'iso_packet_desc = isoPackageDescs
-              }
+            pokeVector (p'libusb_transfer'iso_packet_desc transPtr) isos
 
             let waitForTermination ∷ IO ()
                 waitForTermination = wait timeout lock transPtr
@@ -342,35 +319,45 @@ enumReadIsochronous ∷ ∀ s m α
                                       --   endpoint belongs to the current alternate
                                       --   setting of a claimed interface which belongs
                                       --   to the device.
-                    → [Size]          -- ^ Sizes of isochronous packets. A good
+                    → Unboxed.Vector Size
+                                      -- ^ Sizes of isochronous packets. A good
                                       --   value for these would be the
                                       --   'maxIsoPacketSize'
                     → Timeout         -- ^ Timeout (in milliseconds) that this
                                       --   function should wait for each chunk
                                       --   before giving up due to no response
                                       --   being received.
-                    → Enumerator [s] m α
+                    → Enumerator (Vector s) m α
 enumReadIsochronous devHndl endpointAddr sizes timeout
     | Just wait ← getWait devHndl =
         enum wait
              c'LIBUSB_TRANSFER_TYPE_ISOCHRONOUS
-             nrOfIsoPackets (map initIsoPacketDesc sizes)
+             (VG.map initIsoPacketDesc $ VG.convert sizes)
              devHndl endpointAddr
              timeout
              totalSize
              onCompletion onTimeout
     | otherwise = needThreadedRTSError "enumReadIsochronous"
     where
-      SumLength totalSize nrOfIsoPackets = sumLength sizes
+      totalSize = VG.sum sizes
+      nrOfIsos  = VG.length sizes
 
-      onCompletion, onTimeout ∷ WithResult [s] m α
-      onCompletion transPtr bufferPtr cont _ =
-        peekIsoPacketDescs nrOfIsoPackets transPtr >>= go bufferPtr id
-            where
-              go _   ss [] = cont $ Chunk $ ss []
-              go ptr ss (C'libusb_iso_packet_descriptor l a _ : ds) = do
-                s ← readFromPtr ptr (fromIntegral a)
-                go (ptr `plusPtr` fromIntegral l) (ss ∘ (s:)) ds
+      onCompletion, onTimeout ∷ WithResult (Vector s) m α
+
+      onCompletion transPtr bufferPtr cont _ = do
+        mv ← VGM.unsafeNew nrOfIsos
+        let isoArrayPtr = p'libusb_transfer'iso_packet_desc transPtr
+            go ix ptr
+                | ix < nrOfIsos = do
+                    let isoPtr = advancePtr isoArrayPtr ix
+                    l ← peek (p'libusb_iso_packet_descriptor'length        isoPtr)
+                    a ← peek (p'libusb_iso_packet_descriptor'actual_length isoPtr)
+                    let transferred = fromIntegral a
+                    s ← readFromPtr ptr transferred
+                    VGM.unsafeWrite mv ix s
+                    go (ix+1) (ptr `plusPtr` fromIntegral l)
+                | otherwise = VG.unsafeFreeze mv >>= cont ∘ Chunk
+        go 0 bufferPtr
 
       onTimeout _ _ _ stop = stop ∘ EOF ∘ Just ∘ toException $ TimeoutException
 #endif
